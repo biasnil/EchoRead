@@ -1,0 +1,4 @@
+# Only needed to build the .exe (build_CPU.bat / build_GPU.bat install this for you).
+pyinstaller>=6.10
+pyinstaller-hooks-contrib
+packaging

@@ -1,0 +1,3 @@
+# EchoRead — default install (CPU):   pip install -r requirements.txt
+# For an NVIDIA GPU use requirements-gpu.txt instead (in a separate or cleaned environment).
+-r requirements-cpu.txt

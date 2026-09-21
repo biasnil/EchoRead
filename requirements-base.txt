@@ -1,0 +1,36 @@
+# EchoRead — packages shared by the CPU and GPU installs. Don't install this file on its own:
+#   CPU:  pip install -r requirements-cpu.txt
+#   GPU:  pip install -r requirements-gpu.txt
+# Python 3.10 – 3.12 recommended.
+
+# GUI
+PyQt6
+
+# PDF / images (pypdfium2 = fallback renderer for damaged PDFs that MuPDF can't open)
+pymupdf
+pypdfium2
+pillow
+numpy
+
+# OCR front-end (the PaddlePaddle runtime itself is in the cpu / gpu file)
+paddleocr
+
+# Text-to-speech front-end (the ONNX runtime itself is picked by the pykokoro extra in the cpu / gpu file)
+pykokoro
+# Chinese and Japanese voices need extra packages (English voices work without them).
+#   Chinese: kokorog2p's [zh] extra (jieba, pypinyin...: pure Python).
+#   Japanese: pyopenjtalk-plus, a prebuilt package with its dictionary included (Windows only here: kokorog2p's own [ja] extra
+#   would compile a C++ library and needs the Visual C++ Build Tools).
+kokorog2p[zh]
+pyopenjtalk-plus; sys_platform == "win32"
+# eSpeak NG phonemizer for Kokoro. This wheel bundles the DLL, so no separate eSpeak install is needed.
+espeakng-loader
+
+# Audio playback, the audio cache (FLAC) and WAV/MP3 export — soundfile writes MP3 itself, no ffmpeg needed
+soundfile
+sounddevice
+
+# Paste Link (the only feature that touches the network, and only when Internet Usage is on)
+requests
+readability-lxml
+lxml_html_clean

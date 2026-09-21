@@ -1,0 +1,10 @@
+# EchoRead — CPU install:   pip install -r requirements-cpu.txt
+# Works on any computer. (requirements.txt is the same thing.)
+#
+# Switching from a GPU install? Remove the GPU builds first, or they will shadow these:
+#   pip uninstall -y onnxruntime-gpu paddlepaddle-gpu
+-r requirements-base.txt
+
+pykokoro[cpu]      # brings the CPU onnxruntime
+paddlepaddle==3.2.2   # CPU PaddlePaddle runtime for OCR. PINNED: 3.3.x CPU inference fails on some processors with
+                      # 'ConvertPirAttribute2RuntimeAttribute not support' (the same bug you hit); 3.2.2 does not have it.

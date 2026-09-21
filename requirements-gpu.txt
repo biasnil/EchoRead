@@ -1,0 +1,29 @@
+# EchoRead — NVIDIA GPU install (verified working on CUDA 13.4, Windows, Python 3.12).
+#
+# EASIEST:   .\install_gpu.ps1     (PowerShell, venv activated: runs every step below, then gpu_check.py)
+#
+# A requirements file can't point different packages at different package servers, so the GPU install is three steps.
+# This file is step 1. The two extra commands are in install_gpu.ps1 and are repeated at the bottom of this file.
+#
+# Needs an NVIDIA GPU + current driver, the CUDA 13 toolkit, and cuDNN 9 for CUDA 13 (EchoRead finds them itself;
+# run  python gpu_check.py  to see what it found).
+#
+# The CPU and GPU builds of onnxruntime / paddle share module names, so an environment holds only ONE flavour.
+# Switching from a CPU install:   pip uninstall -y onnxruntime onnxruntime-gpu onnxruntime-directml paddlepaddle
+-r requirements-base.txt
+
+pykokoro[gpu]      # step 1: speech front-end + a stock onnxruntime-gpu from PyPI (step 2 replaces it with the build that works here)
+
+# ---- step 2: ONNX Runtime GPU, the CUDA 13 nightly build (this is what worked; the stock PyPI wheel hit missing-DLL errors)
+#   pip uninstall -y onnxruntime onnxruntime-gpu onnxruntime-directml
+#   pip install coloredlogs flatbuffers numpy packaging protobuf sympy
+#   pip install --pre --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/ onnxruntime-gpu
+#   (that server only has onnxruntime-gpu, which is why the dependencies are installed from PyPI first)
+#   You previously had onnxruntime-directml installed before this step. It should not be needed for CUDA; if a clean
+#   install does not give "GPU WORKS" in gpu_check.py, add   pip install onnxruntime-directml   before the nightly line.
+#
+# ---- step 3: PaddlePaddle GPU for OCR, CUDA 13.0 build (from Paddle's install guide)
+#   pip uninstall -y paddlepaddle
+#   python -m pip install paddlepaddle-gpu==3.3.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu130/
+#
+# Never run  pip install -r requirements-cpu.txt  in this environment afterwards: it puts the CPU builds back.
