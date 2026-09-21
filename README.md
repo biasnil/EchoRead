@@ -53,8 +53,8 @@ Run one from the EchoRead folder (`.\build_CPU.bat`). It creates its own virtual
 
 ## Use
 
-1. **Drop a file** anywhere on the window (or press `Ctrl+O`, or use **＋ Add**). PDF, PNG/JPG/TIFF/BMP/WebP, and .txt/.md all work.
-2. **PDFs with real text** are read straight from their text layer. Scans and images go through PaddleOCR. (Settings → *Default OCR engine* can force OCR.)
+1. **Drop a file** anywhere on the window (or press `Ctrl+O`, or use **＋ Add**). PDF, **EPUB**, **Word (.docx)**, PNG/JPG/TIFF/BMP/WebP, and .txt/.md all work. EPUB chapters and Word headings are kept as paragraphs of their own, footnotes and the contents page are left out, and tables are read row by row. A copy-protected (DRM) EPUB can't be opened. Old Word files (.doc) can't be opened: save them as .docx first.
+2. **PDFs with real text** are read straight from their text layer, with the layout understood (see *Reading PDFs with real text*). Scans and images go through PaddleOCR. (Settings → *Default OCR engine* can force OCR.)
 3. **Regions** (menu in the reader, or *Study → Pick regions first* on Home): drag boxes on the page.
    - **Keep** / **Ignore** boxes; unmarked areas are kept.
    - **Only** reads just your Keep boxes, in the order you drew them.
@@ -62,6 +62,17 @@ Run one from the EchoRead folder (`.\build_CPU.bat`). It creates its own virtual
    - Press **Run OCR** to extract again.
 4. **Click a word** to play from that word (click the first word, or anywhere else in the paragraph, to start at its beginning). The paragraph, the sentence and the exact word being spoken are highlighted as it plays, and it moves on automatically.
 5. **Drag across text** to highlight it in a colour (see *Highlighting*). Right-click a paragraph for *Highlight paragraph*, *Skip* (not read, still shown) and *Ignore* (removed from reading and export).
+
+## Exporting
+
+**Share → Export…** (or **Export…** on a Library card, which opens the document first) shows a small two-step window:
+
+1. **Text or Audio?**
+2. **How?**
+   - *Text:* a single text file (.txt, .md or .json), or each chapter as its own text file (.txt or .md).
+   - *Audio:* **a single audio file with every chapter joined into one** (the whole book, in order, with a pause between chapters), **each chapter as its own audio file** (numbered, in a folder; chapters already exported are skipped, so a stopped export carries on when you run it again), or **only the chapter you are on**. .mp3 is smaller, .wav is best quality.
+
+"Each chapter" is only available for documents that were split into chapters (long books). Pictures, skipped paragraphs and ignored paragraphs are left out. Audio you already listened to is reused; the rest is made now, so a very long book takes about as long as reading it aloud unless most of it was cached. There are no chapter markers inside the single file. *Share → Export per-paragraph audio folder…* is still there.
 
 ## First-run setup
 
@@ -94,6 +105,29 @@ The Listen pill has a **volume slider** (0–100, default 100) with a mute butto
 - **Log file:** `%APPDATA%\EchoRead\logs\echoread.log`, rotating (5 MB, 3 files). Every line has the time, level, module and, for errors, the full traceback.
 - **Unexpected errors** show *"Something went wrong while processing this file."* with an expandable **Show details** area, **Copy traceback** and **Open log file**.
 - **Known situations** get their own message: an unsupported file type is a short pop-up message; a PDF that won't open offers an OCR fallback; OCR that finds nothing says *"No text detected. Try adjusting Keep/Ignore regions."*; a page that can't be fetched says *"Couldn't read this page. Check the URL or disable Internet Usage."*; with no sound output EchoRead plays silently (highlighting keeps running) and warns you; if the disk is full while caching audio, old cached audio is deleted and the write retried; the first-run speech-model download shows a progress bar in the status bar.
+
+## Reading PDFs with real text (columns, headings, footnotes, Bibles)
+
+EchoRead reads a PDF's text with its layout: it knows the size, font and position of every piece of text, so it can do what a person does.
+
+- **Columns** are read one after the other (left column top to bottom, then the right one), with a full-width heading read first. A sentence that carries over a column or page break stays one paragraph.
+- **Headings** (book and chapter titles, section headings such as "THE CREATION") are kept as paragraphs of their own.
+- **Page headers, footers, page numbers and printer's marks** are left out.
+- **Footnotes** at the foot of a page are left out; the small raised letters or numbers that point to them are never read.
+- **Verse numbers (Bibles):** when a PDF looks like a Bible (verse numbers going 1, 2, 3 on several pages), each verse becomes its own paragraph and the numbers are not read, so you can click, bookmark and jump by verse. A big chapter number becomes its own short paragraph "Chapter 3" (placed before the section heading, so it works with the chapter list). Introductions and other pages without verses are read as normal text.
+- **Ordinary text:** paragraphs are found from indentation, gaps and short last lines; line-break hyphens are removed ("in-formation" becomes "information") but real compounds keep theirs; bullets become separate paragraphs and the bullet dot is not read; table-of-contents dot leaders are dropped.
+
+**Tables.** A table with ruled lines is read row by row, using the first row as column names: "Name: Ana. Age: 30. City: Oslo." A table without a header row is read cell by cell. Tables without drawn lines are not detected. *Settings → Read tables row by row* turns it off. (Finding tables costs time, so it only runs on pages that have several long ruled lines.)
+
+**Formulas.** *Settings → Say formulas out loud* (on) writes formulas the way they are said, in the text itself, when a file is opened or re-extracted, and also for pasted text: `x² + y² = z²` becomes "x squared plus y squared equals z squared", `E = mc²` "E equals mc squared", `√16` "the square root of 16", `≤` "is less than or equal to", `15%` "15 percent", Greek letters by name. It is careful: an operator only becomes a word next to numbers or letters, so ordinary sentences, dates, ranges, hyphenated words and web addresses are left alone. It cannot read stacked fractions, integrals or big equations, because a PDF stores those as loose pieces.
+
+**Pictures stay in the document.** Charts, photos and diagrams (also diagrams drawn with shapes and labels) are kept and shown in the reader between the paragraphs, in the place where they are on the page. They are never read aloud, the words written inside them ("FDD", "Download") are not read as text, and they are left out of word counts and exports. The reader plays on to the next paragraph when you click one. This works for PDFs with text, for scanned pages and images (found where a page has a big area that isn't text), and with Smart layout. *Settings → Show pictures in the reader* (on) turns it off. *Settings → Read the words inside pictures* (off) reads a figure's labels, or OCRs a picture that has no text of its own. Pictures are stored in `%APPDATA%\EchoRead\images\`. A file already opened keeps its old text until you use Regions → Re-run text extraction.
+
+**Smart layout for scans (off by default).** *Settings → Smart layout for scans* uses PaddleOCR's PP-StructureV3 on scanned pages: it finds the page's regions, reads them in the right order (columns), and tells titles, footnotes, headers, footers and tables apart, and those regions follow your *headings / footnotes / headers / tables* choices above. It is slower and heavier and downloads extra models the first time you use it; if anything goes wrong EchoRead says so in the status bar and carries on with the standard OCR. Verse numbers in scans are still not removed.
+
+**Settings → Reading PDFs and scans:** *Read headings* (on), *Read footnotes* (off), *Read page headers, footers and page numbers* (off), *Verse numbers* (Automatic / Always / Never) and *OCR sharpness*. They apply to files you open from now on, or after **Regions → Re-run text extraction** (a file that was already extracted keeps its old text until then). Keep/Ignore regions keep working on top of all this.
+
+**Scans (OCR):** columns in a scan are also read one after the other. *OCR sharpness → Sharp* renders each page larger and lets the detector keep that resolution, which helps small print but is slower and uses more memory. Verse numbers and footnote marks inside scanned text are not detected (OCR gives lines, not fonts); scanned Bibles will still contain them.
 
 ## Speed precaching (0.75x – 2.0x)
 

@@ -20,13 +20,27 @@ class AppPaths:
         self.voices_dir = self.root / "voices"
         self.ocr_dir = self.root / "ocr"  # per-page OCR progress, so a stopped scan can resume
         self.highlights_dir = self.root / "highlights"  # one <doc id>.json per document: coloured text highlights
+        self.images_dir = self.root / "images"  # pictures kept from PDFs and scans, shown in the reader (named by content)
         self.profile_dir = self.root / "profile"  # the profile picture (a small square PNG copy; the original is never touched)
         self.log_dir = self.root / "logs"  # echoread.log (rotating) and console.log (library output of a windowed exe)
         self.log_file = self.log_dir / "echoread.log"
 
     def ensure(self) -> None:
-        for d in (self.root, self.docs_dir, self.cache_dir, self.voices_dir, self.ocr_dir, self.highlights_dir, self.profile_dir, self.log_dir):
+        for d in (self.root, self.docs_dir, self.cache_dir, self.voices_dir, self.ocr_dir, self.highlights_dir, self.images_dir, self.profile_dir, self.log_dir):
             d.mkdir(parents=True, exist_ok=True)
+
+    def store_image(self, png: bytes) -> str:
+        """Keep a picture (PNG bytes); returns its file name. The name comes from the content, so the same picture is stored once."""
+        import hashlib
+
+        self.images_dir.mkdir(parents=True, exist_ok=True)
+        name = hashlib.sha1(png).hexdigest()[:16] + ".png"
+        target = self.images_dir / name
+        if not target.exists():
+            tmp = target.with_suffix(".tmp")
+            tmp.write_bytes(png)
+            os.replace(tmp, target)
+        return name
 
     @staticmethod
     def default_root() -> Path:

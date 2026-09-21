@@ -8,7 +8,7 @@ import re
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from .models import Paragraph
+from .models import Paragraph, is_picture
 from .sections import Section, SectionSplitter
 
 
@@ -171,7 +171,7 @@ class ParagraphModel(QObject):
         """First paragraph at or after `index` (moving by `step`) that isn't skipped or ignored, else -1."""
         while 0 <= index < len(self._items):
             p = self._items[index]
-            if not p.skip and not p.ignored:
+            if not p.skip and not p.ignored and not p.picture:  # a picture is shown, never spoken
                 return index
             index += step
         return -1
@@ -243,3 +243,66 @@ class ParagraphModel(QObject):
             g = self._offset + p.index
             p.bookmarked, p.highlighted = g in self._flags["bookmarked"], g in self._flags["highlighted"]
             self.paragraph_changed.emit(p.index)
+
+
+# ---------------------------------------------------------------------------------------------------------- math out loud
+_GREEK = {"α": "alpha", "β": "beta", "γ": "gamma", "δ": "delta", "ε": "epsilon", "ζ": "zeta", "η": "eta", "θ": "theta", "ι": "iota",
+          "κ": "kappa", "λ": "lambda", "μ": "mu", "ν": "nu", "ξ": "xi", "π": "pi", "ρ": "rho", "σ": "sigma", "τ": "tau", "φ": "phi",
+          "χ": "chi", "ψ": "psi", "ω": "omega", "Γ": "capital gamma", "Δ": "delta", "Θ": "capital theta", "Λ": "capital lambda",
+          "Π": "capital pi", "Σ": "sigma", "Φ": "capital phi", "Ψ": "capital psi", "Ω": "omega"}
+_SYMBOLS = {"×": " times ", "÷": " divided by ", "±": " plus or minus ", "≠": " is not equal to ", "≤": " is less than or equal to ",
+            "≥": " is greater than or equal to ", "≈": " is approximately ", "∞": " infinity ", "∑": " the sum of ", "∫": " the integral of ",
+            "∂": " partial ", "∈": " is in ", "→": " goes to ", "∝": " is proportional to ", "−": " minus ", "·": " times ",
+            "½": " one half ", "¼": " one quarter ", "¾": " three quarters ", "⅓": " one third ", "⅔": " two thirds "}
+_SUPERSCRIPT = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁻", "0123456789-")
+_SUBSCRIPT = str.maketrans("₀₁₂₃₄₅₆₇₈₉", "0123456789")
+_PROTECT = re.compile(r"(https?://\S+|www\.\S+|\S+@\S+\.\S+|`[^`]*`)")
+_NUM = r"\d+(?:[.,]\d+)*"
+_OPERAND_BEFORE = r"(?<=[\w)\]])"
+_OPERAND_AFTER = r"(?=[\w(\[\-])"
+
+
+def _power(n: str) -> str:
+    return {"2": " squared ", "3": " cubed "}.get(n, f" to the power of {n} ")
+
+
+def math_to_speech(text: str) -> str:
+    """Write formulas the way they are said: "x² + y² = z²" -> "x squared plus y squared equals z squared".
+    Careful on purpose: an operator is only turned into a word when there are numbers or single letters around it, so ordinary
+    prose, dates, hyphenated words and web addresses are left alone."""
+    if not text or is_picture(text) or not re.search(r"[+=<>*^/×÷±≠≤≥≈∞∑∫∂∈→∝−·½¼¾⅓⅔√π%°²³⁰¹⁴⁵⁶⁷⁸⁹₀-₉α-ωΓΔΘΛΠΣΦΨΩ]|\d\s-\s\d", text):
+        return text
+    out = []
+    for i, part in enumerate(_PROTECT.split(text)):
+        out.append(part if i % 2 else _math_part(part))
+    joined = re.sub(r"[ \t]{2,}", " ", "".join(out)).strip()
+    return re.sub(r"\s+([.,;:!?)\]])", r"\1", joined) if joined != text else joined  # no gap left before punctuation
+
+
+def _math_part(s: str) -> str:
+    s = s.replace("H₂O", "H2O").replace("CO₂", "CO2")  # chemistry formulas are read as written
+    s = re.sub(r"√\s*\(([^)]*)\)", r" the square root of \1 ", s)
+    s = re.sub(r"√\s*(\w+)", r" the square root of \1 ", s)
+    s = re.sub(r"(?<=\w)([⁰¹²³⁴⁵⁶⁷⁸⁹⁻]+)", lambda m: _power(m.group(1).translate(_SUPERSCRIPT)), s)
+    s = re.sub(r"(?<=\w)([₀₁₂₃₄₅₆₇₈₉]+)", lambda m: " sub " + m.group(1).translate(_SUBSCRIPT) + " ", s)
+    s = re.sub(r"(?<=[\w)])\^\(?(-?\w+)\)?", lambda m: _power(m.group(1)), s)
+    for k, v in _SYMBOLS.items():
+        s = s.replace(k, v)
+    greek = "".join(_GREEK)
+    s = re.sub(rf"(?<![\u0370-\u03ff])([{greek}])(?![\u0370-\u03ff])", lambda m: f" {_GREEK[m.group(1)]} ", s)
+    s = re.sub(rf"({_NUM})\s*%", r"\1 percent", s)
+    s = re.sub(rf"({_NUM})\s*°\s*([CF])\b", lambda m: f"{m.group(1)} degrees {'Celsius' if m.group(2) == 'C' else 'Fahrenheit'}", s)
+    s = re.sub(rf"({_NUM})\s*°", r"\1 degrees", s)
+    # ASCII operators. Written with spaces around them (x + y, a = b, 6 / 3) they are turned into words; stuck between two
+    # letters or digits (2+3=5, x+y) too. Anything else (C++, dates, ranges, addresses) is left alone.
+    for op, word in (("+", "plus"), ("=", "equals"), ("*", "times")):
+        s = re.sub(rf"(?<=[\w)\]$])\s+{re.escape(op)}\s+(?=[\w(\[$\-])", f" {word} ", s)
+        if True:
+            s = re.sub(rf"(?<=[A-Za-z0-9)\]])\s*{re.escape(op)}\s*(?=[A-Za-z0-9(\[])", f" {word} ", s) if op != "*" else re.sub(
+                r"(?<=\d)\s*\*\s*(?=\d)", " times ", s)
+    # a minus needs spaces around it, a number or a single letter after it, and something formula-like before it
+    s = re.sub(r"(\d|[)\]]|\b[A-Za-z]|(?<=\d)[A-Za-z]|squared|cubed)\s+-\s+(?=\d|[A-Za-z]\b|\()", r"\1 minus ", s)
+    s = re.sub(r"(\d|\b[A-Za-z]|[)\]])\s+/\s+(?=\d|[A-Za-z]\b|\()", r"\1 divided by ", s)  # 6 / 3, a / b: never words around a slash
+    s = re.sub(r"(?<=\w)\s+<\s+(?=\w)", " is less than ", s)
+    s = re.sub(r"(?<=\w)\s+>\s+(?=\w)", " is greater than ", s)
+    return s

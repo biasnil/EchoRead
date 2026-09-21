@@ -119,6 +119,7 @@ QPushButton#nav[active="true"] { background: $nav_active; color: $accent; font-w
 QPushButton#tab { background: transparent; border: none; border-radius: 16px; padding: 7px 16px; color: $body; }
 QPushButton#tab:checked { background: $card; color: $heading; border: 1px solid $border; }
 QPushButton#sourcecard { background: $card; border: 1px solid $border; border-radius: 16px; padding: ${card_pad}px; text-align: left; color: $strong; font-size: 11pt; }
+QPushButton#sourcecard:checked { border: 2px solid $accent; }
 QPushButton#sourcecard:hover { border: 1px solid $accent; }
 QPushButton#sourcecard:disabled { color: $disabled; background: $hover; }
 QPushButton#listen { background: $accent; color: $on_accent; border: none; border-radius: 18px; padding: 11px 28px; font-weight: 700; font-size: 11pt; }

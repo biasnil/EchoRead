@@ -25,6 +25,25 @@ def nearest_speed(value: float) -> float:
     return min(SPEEDS, key=lambda s: abs(s - float(value)))
 
 
+PICTURE_PREFIX, PICTURE_SUFFIX = "\u27e6image:", "\u27e7"  # a paragraph that is a picture: "⟦image:<file>.png⟧"
+
+
+def picture_marker(name: str) -> str:
+    return f"{PICTURE_PREFIX}{name}{PICTURE_SUFFIX}"
+
+
+def picture_name(text: str) -> str | None:
+    """The stored picture file a paragraph stands for, or None when it is ordinary text."""
+    t = text.strip()
+    if t.startswith(PICTURE_PREFIX) and t.endswith(PICTURE_SUFFIX) and len(t) > len(PICTURE_PREFIX) + 1:
+        return t[len(PICTURE_PREFIX):-1]
+    return None
+
+
+def is_picture(text: str) -> bool:
+    return picture_name(text) is not None
+
+
 @dataclass
 class Paragraph:
     index: int
@@ -33,6 +52,10 @@ class Paragraph:
     ignored: bool = False
     bookmarked: bool = False
     highlighted: bool = False
+
+    @property
+    def picture(self) -> str | None:
+        return picture_name(self.text)
 
 
 @dataclass

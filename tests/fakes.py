@@ -80,12 +80,17 @@ def fake_stream_factory(rate, callback):
     return FakeStream(rate, callback)
 
 
+CREATED: list = []  # every Services made here; tests/conftest.py shuts them down after each test
+
+
 def make_services(root, with_timings: bool = False, **overrides) -> Services:
     FakeStream.instances.clear()
     overrides.setdefault("tts", FakeTTS(with_timings=with_timings))
     overrides.setdefault("ocr", FakeOCR())
     overrides.setdefault("player", AudioPlayer(stream_factory=fake_stream_factory))
-    return Services.build(AppPaths(root), **overrides)
+    services = Services.build(AppPaths(root), **overrides)
+    CREATED.append(services)
+    return services
 
 
 SAMPLE = (

@@ -62,6 +62,11 @@ class SelfTest:
         self.check("bundled reader fonts load and text lays out", self._fonts)
         self.check("log file is written (rotating handler) and errors are reported", self._logging)
         self.check("word timeline and highlight store", self._highlight_logic)
+        self.check("PDF layout reader puts two columns in reading order", self._pdf_layout)
+        self.check("tables in a PDF are found and read row by row (PyMuPDF's table finder is in the build)", self._pdf_tables, WARN)
+        self.check("formulas are written the way they are said", self._math)
+        self.check("drawings and pictures in a PDF are found and kept as pictures", self._pictures)
+        self.check("EPUB and Word files can be read (lxml is in the build)", self._book_formats)
 
         self.section("Package metadata (PaddleX reads dist-info; PyInstaller drops it unless told to)")
         self.check("dist-info for the key packages", self._metadata)
@@ -89,6 +94,7 @@ class SelfTest:
         self.check("paddle imports; CPU/GPU build matches this exe", self._paddle)
         self.check("PaddleX finds its optional dependencies (the classic 'requires additional dependencies' error)", self._paddlex_deps)
         self.check("PaddleOCR imports", self._paddleocr_import)
+        self.check("Smart layout (PP-StructureV3) can be imported; its models download on first use", self._smart_import, WARN)
 
         verdict = "PASSED" if self.failures == 0 else f"FAILED ({self.failures} critical)"
         self.lines += ["", f"RESULT: {verdict}   ({self.warnings} warning{'s' if self.warnings != 1 else ''})"]
@@ -99,7 +105,7 @@ class SelfTest:
     def _own_modules(self):
         for name in ("core.services", "core.playback", "core.exporter", "core.extractor", "core.sections", "core.gpu",
                      "ui.main_window", "ui.reader_view", "ui.settings_dialog", "ui.regions_dialog", "ui.theme",
-                     "core.errors", "core.highlights", "core.profile", "core.wordtiming", "ui.widgets", "ui.onboarding",
+                     "core.errors", "core.highlights", "core.profile", "core.wordtiming", "core.pdflayout", "core.formats", "ui.widgets", "ui.onboarding",
                      "ui.highlight_palette", "ui.error_dialog", "ui.toast"):
             importlib.import_module(name)
         return "all modules import"
@@ -181,6 +187,130 @@ class SelfTest:
             finally:
                 reporter.close()
         return "logs/echoread.log"
+
+    def _pdf_layout(self):
+        try:
+            import pymupdf as fitz
+        except ImportError:
+            import fitz
+        from core.loader import DocumentLoader
+        from core.pdflayout import LayoutOptions
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "columns.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=400, height=500)
+            for i in range(8):
+                page.insert_text((40, 100 + 14 * i), f"left column line number {i} of text", fontsize=10)
+                page.insert_text((215, 100 + 14 * i), f"right column line number {i} of text", fontsize=10)
+            doc.save(str(path))
+            doc.close()
+            loader = DocumentLoader()
+            try:
+                loader.open(path)
+                text = " ".join(b.text for b in loader.layout_blocks(0, LayoutOptions(verses="never")))
+            finally:
+                loader.close()
+        if not text or text.index("left column line number 7") > text.index("right column line number 0"):
+            raise RuntimeError("columns came out in the wrong order: " + text[:80])
+        return "2 columns"
+
+    def _pdf_tables(self):
+        try:
+            import pymupdf as fitz
+        except ImportError:
+            import fitz
+        from core.loader import DocumentLoader
+        from core.pdflayout import LayoutOptions
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "table.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=400, height=300)
+            rows = [["Name", "Age"], ["Ana", "30"], ["Ben", "25"]]
+            for r, row in enumerate(rows):
+                for c, cell in enumerate(row):
+                    page.insert_text((56 + c * 100, 96 + r * 24), cell, fontsize=10)
+            for r in range(4):
+                page.draw_line((50, 80 + r * 24), (250, 80 + r * 24))
+            for c in range(3):
+                page.draw_line((50 + c * 100, 80), (50 + c * 100, 152))
+            doc.save(str(path))
+            doc.close()
+            loader = DocumentLoader()
+            try:
+                loader.open(path)
+                text = " ".join(b.text for b in loader.layout_blocks(0, LayoutOptions(verses="never")))
+            finally:
+                loader.close()
+        if "Name: Ana. Age: 30." not in text:
+            raise RuntimeError("the table was not recognised: " + text[:80])
+        return "1 table"
+
+    def _book_formats(self):
+        import zipfile
+
+        from core.formats import read_docx, read_epub
+
+        w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        with tempfile.TemporaryDirectory() as tmp:
+            docx = Path(tmp) / "a.docx"
+            with zipfile.ZipFile(docx, "w") as z:
+                z.writestr("word/document.xml", f'<w:document xmlns:w="{w}"><w:body><w:p><w:r><w:t>Hello Word</w:t></w:r></w:p></w:body></w:document>')
+            epub = Path(tmp) / "a.epub"
+            with zipfile.ZipFile(epub, "w") as z:
+                z.writestr("META-INF/container.xml", '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
+                           '<rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
+                z.writestr("c.opf", '<package xmlns="http://www.idpf.org/2007/opf"><manifest><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/>'
+                           '</manifest><spine><itemref idref="a"/></spine></package>')
+                z.writestr("a.xhtml", "<html><body><p>Hello EPUB</p></body></html>")
+            if read_docx(docx)[1] != "Hello Word" or read_epub(epub)[1] != "Hello EPUB":
+                raise RuntimeError("the test books were not read back correctly")
+        return "epub + docx"
+
+    def _pictures(self):
+        try:
+            import pymupdf as fitz
+        except ImportError:
+            import fitz
+        from PIL import Image
+
+        from core.loader import DocumentLoader
+        from core.models import picture_marker
+        from core.pdflayout import LayoutOptions
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "figure.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=400, height=500)
+            page.insert_text((40, 60), "A sentence before the figure with several words.", fontsize=10)
+            for k in range(6):  # a drawing: six coloured blocks close together, one label
+                page.draw_rect(fitz.Rect(60 + 40 * k, 150, 90 + 40 * k, 200 + 10 * k), color=None, fill=(0.2, 0.5, 0.2 + 0.1 * k))
+            page.insert_text((150, 260), "Label", fontsize=9)
+            page.insert_text((40, 420), "A sentence after the figure with several words.", fontsize=10)
+            doc.save(str(path))
+            doc.close()
+            loader = DocumentLoader()
+            try:
+                loader.open(path)
+                figures = loader.figure_regions(0)
+                blocks = loader.layout_blocks(0, LayoutOptions(verses="never"), figures=[(b, picture_marker("x.png")) for b, _png in figures])
+            finally:
+                loader.close()
+        if len(figures) != 1 or Image.open(__import__("io").BytesIO(figures[0][1])).size[0] < 100:
+            raise RuntimeError(f"expected one figure, found {len(figures)}")
+        kinds = [b.kind for b in blocks]
+        if kinds != ["body", "figure", "body"]:
+            raise RuntimeError("the figure is not between the two sentences: " + str(kinds))
+        return "1 figure kept between 2 paragraphs"
+
+    def _math(self):
+        from core.paragraphs import math_to_speech
+
+        said = math_to_speech("x² + y² = z²")
+        if said != "x squared plus y squared equals z squared":
+            raise RuntimeError(said)
+        return said
 
     def _highlight_logic(self):
         from core.wordtiming import WordTimeline
@@ -391,6 +521,11 @@ class SelfTest:
         if bad:
             raise RuntimeError(f"PaddleX reports missing extras {bad}: package metadata (dist-info) was not bundled")
         return str(results)
+
+    def _smart_import(self):
+        from paddleocr import PPStructureV3
+
+        return PPStructureV3.__name__
 
     def _paddleocr_import(self):
         from paddleocr import PaddleOCR  # noqa: F401

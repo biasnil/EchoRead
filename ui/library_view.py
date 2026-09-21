@@ -12,6 +12,7 @@ from .widgets import make_button, make_label
 
 class LibraryView(QWidget):
     open_requested = pyqtSignal(str)  # doc id
+    export_requested = pyqtSignal(str)  # doc id: open it and show the Export dialog
 
     def __init__(self, library: Library, parent=None):
         super().__init__(parent)
@@ -29,6 +30,7 @@ class LibraryView(QWidget):
         row = QHBoxLayout()
         row.addStretch(1)
         row.addWidget(make_button("Delete", callback=self._delete))
+        row.addWidget(make_button("Export…", callback=self._export))
         row.addWidget(make_button("Open", "primary", self._open))
         lay.addLayout(row)
         self._list.itemDoubleClicked.connect(lambda _item: self._open())
@@ -56,6 +58,11 @@ class LibraryView(QWidget):
         doc_id = self._selected()
         if doc_id:
             self.open_requested.emit(doc_id)
+
+    def _export(self) -> None:
+        doc_id = self._selected()
+        if doc_id:
+            self.export_requested.emit(doc_id)
 
     def _delete(self) -> None:
         doc_id = self._selected()

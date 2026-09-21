@@ -19,7 +19,7 @@ import soundfile as sf
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from .errors import get_logger
-from .models import SPEEDS, speed_key
+from .models import SPEEDS, is_picture, speed_key
 from .paths import AppPaths
 from .settings import SettingsManager
 from .tts import TTSService
@@ -109,12 +109,16 @@ class VoiceCache(QObject):
             self._requests = []
             self._cond.notify_all()
 
-    def shutdown(self) -> None:
+    def shutdown(self, wait: float = 0.0) -> None:
+        """Stop for good. `wait`: seconds to give the worker thread to finish what it is doing (0 = don't wait)."""
         with self._cond:
             self._gen += 1
             self._texts = []
             self._quit = True
             self._cond.notify_all()
+        thread = self._thread
+        if wait > 0 and thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(wait)
 
     def set_focus(self, current: int, speed: float) -> None:
         """The reader moved or changed speed: re-prioritise."""
@@ -307,7 +311,7 @@ class VoiceCache(QObject):
         self._done_enabled = sum(1 for (_i, k) in self._done if k in keys)
 
     def _total(self) -> int:
-        return 0 if self._paused else len(self._texts) * len(self._enabled_speeds())
+        return 0 if self._paused else sum(1 for x in self._texts if not is_picture(x)) * len(self._enabled_speeds())
 
     def _rebuild_plan(self) -> None:
         if self._paused:
@@ -328,7 +332,7 @@ class VoiceCache(QObject):
         plan += [(i, s) for i in far for s in others]
         plan += [(i, act) for i in behind]
         plan += [(i, s) for i in behind for s in others]
-        self._plan = [(i, s) for (i, s) in plan if (i, speed_key(s)) not in self._done]
+        self._plan = [(i, s) for (i, s) in plan if (i, speed_key(s)) not in self._done and not is_picture(self._texts[i])]
         self._plan_pos = 0
 
     def _pop_job(self):

@@ -14,7 +14,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from .models import RENAMED_VOICES, SPEEDS, nearest_speed
 from .paths import AppPaths
 
-GROUPS = ("profile", "playback", "reader")
+GROUPS = ("profile", "playback", "reader", "pdf")
 
 
 class SettingsManager(QObject):
@@ -35,6 +35,16 @@ class SettingsManager(QObject):
         "internet_usage": False,
         "precache_speeds": [1.0],  # speeds prepared in the background besides the one being listened to (default: just 1.0x)
         "cache_limit_mb": 5120,  # oldest cached chapters are deleted beyond this; 0 = no limit
+        "read_math": True,  # write formulas the way they are said: "x² + y² = z²" -> "x squared plus y squared equals z squared"
+        "ocr_smart": False,  # PP-StructureV3: layout-aware reading of scans (columns, headers, footnotes, tables); slower, more models
+        "ocr_quality": "standard",  # "sharp": render scans at a higher resolution for small print (slower)
+        "pdf.headings": True,  # read titles and section headings
+        "pdf.footnotes": False,  # read the notes at the foot of the page
+        "pdf.furniture": False,  # read running headers/footers, page numbers, printer's marks
+        "pdf.show_pictures": True,  # keep the pictures of a PDF or scan in the reader, between the paragraphs (never read aloud)
+        "pdf.read_images": False,  # OCR the pictures inside a PDF that has text (off: pictures are left alone)
+        "pdf.tables": True,  # read a table row by row ("Name: Ana. Age: 30.")
+        "pdf.verses": "auto",  # "auto" | "always" | "never": one paragraph per verse, numbers not read
         "profile.name": "",
         "profile.avatar_color": "#6366F1",
         "profile.avatar_image": "",  # file name inside <root>/profile, or "" for none
@@ -236,6 +246,87 @@ class SettingsManager(QObject):
     @cache_limit_mb.setter
     def cache_limit_mb(self, value: int) -> None:
         self._set("cache_limit_mb", max(0, int(value)))
+
+    # -- reading PDFs and scans
+    @property
+    def ocr_quality(self) -> str:
+        return "sharp" if self._data["ocr_quality"] == "sharp" else "standard"
+
+    @ocr_quality.setter
+    def ocr_quality(self, value: str) -> None:
+        self._set("ocr_quality", "sharp" if value == "sharp" else "standard")
+
+    @property
+    def ocr_smart(self) -> bool:
+        return bool(self._data["ocr_smart"])
+
+    @ocr_smart.setter
+    def ocr_smart(self, value: bool) -> None:
+        self._set("ocr_smart", bool(value))
+
+    @property
+    def read_math(self) -> bool:
+        return bool(self._data["read_math"])
+
+    @read_math.setter
+    def read_math(self, value: bool) -> None:
+        self._set("read_math", bool(value))
+
+    @property
+    def pdf_show_pictures(self) -> bool:
+        return bool(self._data["pdf.show_pictures"])
+
+    @pdf_show_pictures.setter
+    def pdf_show_pictures(self, value: bool) -> None:
+        self._set("pdf.show_pictures", bool(value))
+
+    @property
+    def pdf_read_images(self) -> bool:
+        return bool(self._data["pdf.read_images"])
+
+    @pdf_read_images.setter
+    def pdf_read_images(self, value: bool) -> None:
+        self._set("pdf.read_images", bool(value))
+
+    @property
+    def pdf_tables(self) -> bool:
+        return bool(self._data["pdf.tables"])
+
+    @pdf_tables.setter
+    def pdf_tables(self, value: bool) -> None:
+        self._set("pdf.tables", bool(value))
+
+    @property
+    def pdf_headings(self) -> bool:
+        return bool(self._data["pdf.headings"])
+
+    @pdf_headings.setter
+    def pdf_headings(self, value: bool) -> None:
+        self._set("pdf.headings", bool(value))
+
+    @property
+    def pdf_footnotes(self) -> bool:
+        return bool(self._data["pdf.footnotes"])
+
+    @pdf_footnotes.setter
+    def pdf_footnotes(self, value: bool) -> None:
+        self._set("pdf.footnotes", bool(value))
+
+    @property
+    def pdf_furniture(self) -> bool:
+        return bool(self._data["pdf.furniture"])
+
+    @pdf_furniture.setter
+    def pdf_furniture(self, value: bool) -> None:
+        self._set("pdf.furniture", bool(value))
+
+    @property
+    def pdf_verses(self) -> str:
+        return self._data["pdf.verses"] if self._data["pdf.verses"] in ("auto", "always", "never") else "auto"
+
+    @pdf_verses.setter
+    def pdf_verses(self, value: str) -> None:
+        self._set("pdf.verses", value if value in ("auto", "always", "never") else "auto")
 
     # -- reader appearance
     @property

@@ -132,7 +132,7 @@ for pkg in lazy_packages:
     hiddenimports |= subs
     if pkg not in HEAVY and len(H.python_files(pkg)) <= 250:
         manifest |= subs | {pkg}
-hiddenimports |= {"core.selftest", "core.frozen", "PyQt6.QtSvg"}  # QtSvg draws the playback icons (assets/icons/*.svg)
+hiddenimports |= {"core.selftest", "core.frozen", "core.pdflayout", "core.formats", "PyQt6.QtSvg"}  # QtSvg draws the playback icons (assets/icons/*.svg)
 note(f"hidden imports: {len(hiddenimports)}   (self-test will verify {len(manifest)} of them)")
 
 BUILD_INFO.write_text(json.dumps({"flavor": FLAVOR, "name": NAME, "modules": sorted(manifest)}), "utf-8")

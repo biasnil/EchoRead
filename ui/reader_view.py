@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLi
                              QScrollArea, QSlider, QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
 from core.highlights import HighlightStore
-from core.models import SPEEDS, DocInfo, speed_label
+from core.models import SPEEDS, DocInfo, is_picture, speed_label
 from core.paragraphs import ParagraphModel
 from core.playback import PlaybackController
 from core.settings import SettingsManager
@@ -34,11 +34,12 @@ class ReaderView(QWidget):
     export_audio_requested = pyqtSignal(str)  # ".wav" | ".mp3"
     export_folder_requested = pyqtSignal()
     export_chapters_requested = pyqtSignal(str)  # ".mp3" | ".wav"
+    export_requested = pyqtSignal()  # the "Export…" dialog (text or audio; single file or per chapter)
     voice_selected = pyqtSignal(str)
     message_requested = pyqtSignal(str)  # something short to tell the user (the main window shows it as a toast)
 
     def __init__(self, settings: SettingsManager, state: AppState, model: ParagraphModel,
-                 playback: PlaybackController, catalog: VoiceCatalog, highlights: HighlightStore, parent=None):
+                 playback: PlaybackController, catalog: VoiceCatalog, highlights: HighlightStore, images_dir=None, parent=None):
         super().__init__(parent)
         self._settings = settings
         self._state = state
@@ -46,6 +47,7 @@ class ReaderView(QWidget):
         self._playback = playback
         self._catalog = catalog
         self._highlights = highlights
+        self._images_dir = images_dir  # where the pictures kept from PDFs and scans live
         self._widgets: list[ParagraphWidget] = []
         self._show_ignored = False
         self._theme = settings.theme
@@ -55,6 +57,9 @@ class ReaderView(QWidget):
         self._timeline_key: tuple | None = None
         self._last_word_y: float | None = None
         self._premute = 100
+        self._scroll_timer = QTimer(self)
+        self._scroll_timer.setSingleShot(True)
+        self._scroll_timer.timeout.connect(self._scroll_to_current_now)
         self._volume_timer = QTimer(self)
         self._volume_timer.setSingleShot(True)
         self._volume_timer.setInterval(250)
@@ -126,18 +131,8 @@ class ReaderView(QWidget):
         self._panel_btn.setCheckable(True)
         bar.addWidget(self._panel_btn)
         share = self._menu_button("Share", bar)
-        text_menu = share.addMenu("Export text as")
-        for ext in (".txt", ".md", ".json"):
-            self._add(text_menu, ext, lambda e=ext: self.export_text_requested.emit(e))
-        audio_menu = share.addMenu("Export audio as")
-        for ext in (".wav", ".mp3"):
-            self._add(audio_menu, ext, lambda e=ext: self.export_audio_requested.emit(e))
+        self._add(share, "Export…", self.export_requested.emit)  # text or audio, the whole thing or one file per chapter
         self._add(share, "Export per-paragraph audio folder…", self.export_folder_requested.emit)
-        chap_menu = share.addMenu("Export every chapter as")
-        for ext in (".mp3", ".wav"):
-            self._add(chap_menu, ext, lambda e=ext: self.export_chapters_requested.emit(e))
-        self._chapters_export = chap_menu.menuAction()
-        self._chapters_export.setVisible(False)
         share.addSeparator()
         self._add(share, "Copy all text", self._copy_all)
         outer.addLayout(bar)
@@ -344,7 +339,10 @@ class ReaderView(QWidget):
         self._update_header()
 
     def scroll_to_current(self) -> None:
-        QTimer.singleShot(60, lambda: self._scroll_to(self._model.current))
+        self._scroll_timer.start(60)  # a timer owned by this widget: it can never fire after the reader is gone
+
+    def _scroll_to_current_now(self) -> None:
+        self._scroll_to(self._model.current)
 
     def apply_reader_style(self) -> None:
         """Font family, size and line spacing from Settings, applied to what is on screen (no reload)."""
@@ -434,7 +432,7 @@ class ReaderView(QWidget):
         self._clear_widgets()
         self._timeline = self._timeline_key = None
         for p in self._model:
-            w = ParagraphWidget(p.index, p.text)
+            w = ParagraphWidget(p.index, p.text, self._images_dir)
             w.apply_theme(self._theme)
             w.body.set_font_spec(self._font, self._line_spacing)
             w.set_selectable(self._highlight_mode)
@@ -514,7 +512,7 @@ class ReaderView(QWidget):
             self._section_label.setText(f"{m.sections[m.section_index].title}   ·   {m.section_index + 1} / {m.section_count}")
         n = len(m)
         if n:
-            words = sum(len(t.split()) for t in m.all_texts())
+            words = sum(len(t.split()) for t in m.all_texts() if not is_picture(t))
             minutes = max(1, round(words / (160 * self._state.speed)))
             pages = f"{doc.page_count} page{'s' if doc.page_count != 1 else ''} · " if doc and doc.page_count and not multi else ""
             scope = " in this chapter" if multi else ""
@@ -532,7 +530,6 @@ class ReaderView(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, i)
             self._chapter_list.addItem(item)
         self._chapters_btn.setVisible(multi)
-        self._chapters_export.setVisible(multi)
         if not multi and self._chapters_btn.isChecked():
             self._chapters_btn.setChecked(False)
 
@@ -669,6 +666,8 @@ class ReaderView(QWidget):
 
     def _on_context(self, i: int, pos: QPoint, char: int = -1) -> None:
         p = self._model[i]
+        if p.picture:  # a picture has nothing to play, copy or highlight
+            return
         g = self._model.offset + i
         hit = self._highlights.at(g, char) if char >= 0 else None
         if hit is not None:  # right-click on a highlight: Change color / Remove / Copy

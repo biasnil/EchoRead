@@ -67,7 +67,7 @@ class Services:
         playback = PlaybackController(state, model, cache, player)
         library = Library(paths)
         web = WebExtractor(settings)
-        extractor = TextExtractor(loader, ocr, regions, settings)
+        extractor = TextExtractor(loader, ocr, regions, settings, store_image=paths.store_image)
         exporter = Exporter(model, cache, tts, settings)
         profile = ProfileManager(settings, paths)
         highlights = HighlightStore(paths)

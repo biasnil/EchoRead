@@ -94,7 +94,7 @@ class HomeView(QWidget):
         src.setLayout(sources)
         sources.setContentsMargins(0, 0, 0, 0)
         panels.addWidget(self._panel([
-            self._card("🎧  Read Aloud", "Upload any file to listen — PDF, image or text.", "Upload Files", self.upload_requested.emit),
+            self._card("🎧  Read Aloud", "Upload any file to listen — PDF, EPUB, Word, image or text.", "Upload Files", self.upload_requested.emit),
             src,
         ]))
         # Create

@@ -6,14 +6,14 @@ from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
-from PyQt6.QtWidgets import (QApplication, QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel,
+from PyQt6.QtWidgets import (QDialog, QApplication, QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel,
                              QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProgressBar,
                              QStackedWidget, QVBoxLayout, QWidget)
 
 from core.errors import get_logger
 from core.library import Library
 from core.models import DocInfo
-from core.paragraphs import ParagraphModel
+from core.paragraphs import ParagraphModel, math_to_speech
 from core.paths import AppPaths
 from core.services import Services
 from core.workers import TaskWorker
@@ -27,7 +27,7 @@ from .settings_dialog import SettingsDialog
 from .theme import FontLibrary, build_stylesheet
 from .toast import Toast
 from .voices_view import VoicesView
-from .widgets import ShortcutHelpDialog, make_button, make_label, paint_avatar
+from .widgets import ExportDialog, ShortcutHelpDialog, make_button, make_label, paint_avatar
 
 PAGES = {"home": 0, "reader": 1, "library": 2, "voices": 3}
 
@@ -82,7 +82,7 @@ class MainWindow(QMainWindow):
         right.addWidget(self._topbar)
         self._stack = QStackedWidget()
         self.home = HomeView(s.settings)
-        self.reader = ReaderView(s.settings, s.state, s.model, s.playback, s.catalog, s.highlights)
+        self.reader = ReaderView(s.settings, s.state, s.model, s.playback, s.catalog, s.highlights, s.paths.images_dir)
         self.library_view = LibraryView(s.library)
         self.voices_view = VoicesView(s.catalog, s.settings)
         for page in (self.home, self.reader, self.library_view, self.voices_view):
@@ -227,9 +227,11 @@ class MainWindow(QMainWindow):
         r.export_audio_requested.connect(self.export_audio)
         r.export_folder_requested.connect(self.export_folder)
         r.export_chapters_requested.connect(self.export_chapters)
+        r.export_requested.connect(self.show_export_dialog)
         r.voice_selected.connect(lambda vid: setattr(s.settings, "voice", vid))
         # library / voices
         self.library_view.open_requested.connect(self.open_library_entry)
+        self.library_view.export_requested.connect(self._export_from_library)
         self.voices_view.use_requested.connect(lambda vid: setattr(s.settings, "voice", vid))
         self.voices_view.preview_requested.connect(self.preview_voice)
         self.voices_view.import_requested.connect(self.import_voice_pack)
@@ -424,7 +426,7 @@ class MainWindow(QMainWindow):
     def pick_file(self, regions_first: bool = False) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "Open file", "",
-            "Documents (*.pdf *.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp *.txt *.md);;All files (*)")
+            "Documents (*.pdf *.epub *.docx *.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp *.txt *.md);;All files (*)")
         if path:
             self.open_path(path, regions_first)
 
@@ -447,12 +449,43 @@ class MainWindow(QMainWindow):
                 self._error("Could not open file", str(exc))
                 return
             self._open_text_doc(path.stem, text, "file", str(path.resolve()))
+        elif ext in (".epub", ".docx"):
+            self._open_book_file(path, ext)
+        elif ext == ".doc":
+            self.toast("Old Word files (.doc) can't be opened. In Word, use Save As and choose .docx, then open that.", 7000)
         elif self.s.loader.supports(path):
             self._open_document_file(path, regions_first)
         else:
-            self.toast("Unsupported file type. EchoRead opens PDF, image (PNG/JPG/TIFF/BMP/WebP) and text (.txt/.md) files.", 6000)
+            self.toast("Unsupported file type. EchoRead opens PDF, EPUB, Word (.docx), image (PNG/JPG/TIFF/BMP/WebP) and text (.txt/.md) files.", 7000)
+
+    def _open_book_file(self, path: Path, ext: str) -> None:
+        """An EPUB or Word file: read it off the GUI thread, then open it like any other text."""
+        from core.formats import UnreadableBook, read_docx, read_epub
+
+        reader = read_epub if ext == ".epub" else read_docx
+        source = str(path.resolve())
+
+        def done(result) -> None:
+            title, text = result
+            self._open_text_doc(title, text, "file", source)
+
+        def failed(message: str) -> None:
+            self._error("Could not open this file", message)
+
+        def work(_worker):
+            try:
+                return reader(path)
+            except UnreadableBook:
+                raise
+            except Exception as exc:  # anything odd inside the file: say so plainly, keep the details in the log
+                get_logger("main_window").error("could not read %s", path, exc_info=True)
+                raise UnreadableBook(f"This file couldn't be read ({exc.__class__.__name__}).") from exc
+
+        self._start_job(TaskWorker(work), done, "Reading the book…", on_fail=failed)
 
     def _open_text_doc(self, title: str, text: str, kind: str, source: str | None) -> None:
+        if self.s.settings.read_math:
+            text = math_to_speech(text)
         self.s.loader.close()
         self.s.regions.clear()
         self._file_doc = None
@@ -462,6 +495,7 @@ class MainWindow(QMainWindow):
         self._export_after = False
 
     _export_after = False
+    _export_dialog_after = False
 
     def _open_document_file(self, path: Path, regions_first: bool) -> None:
         if self._job is not None:
@@ -611,6 +645,9 @@ class MainWindow(QMainWindow):
         self._show_page("reader")
         if export_after:
             self.export_audio(".wav")
+        if self._export_dialog_after:
+            self._export_dialog_after = False
+            self.show_export_dialog()
 
     def _on_section_changed(self, _index: int) -> None:
         """A different chapter was opened: precache that chapter and remember where you are."""
@@ -678,6 +715,58 @@ class MainWindow(QMainWindow):
         self._start_job(TaskWorker(ex.extract), done, "Starting…")
 
     # ------------------------------------------------------------------ export
+    def _export_from_library(self, doc_id: str) -> None:
+        """Export... on a Library card: open the document (its saved text), then ask what to export."""
+        self._export_dialog_after = True
+        self.open_library_entry(doc_id)
+
+    def show_export_dialog(self) -> None:
+        """Step 1: text or audio. Step 2: one file, or one per chapter. Then the usual file/folder chooser and the export."""
+        m = self.s.model
+        if not len(m):
+            self.toast("Open something first, then export it.")
+            return
+        title = m.sections[m.section_index].title if m.section_count > 1 else None
+        dlg = ExportDialog(m.section_count, title, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        kind, scope, ext = dlg.kind, dlg.scope, dlg.ext
+        if kind == "text":
+            (self.export_text_chapters if scope == "chapters" else self.export_text)(ext)
+        elif scope == "chapters":
+            self.export_chapters(ext)
+        elif scope == "open":
+            self.export_audio(ext)
+        else:
+            self.export_book_audio(ext)
+
+    def export_text_chapters(self, ext: str) -> None:
+        if self.s.model.section_count < 2:
+            return
+        folder = QFileDialog.getExistingDirectory(self, "Choose a folder for one text file per chapter")
+        if not folder:
+            return
+        try:
+            self.s.exporter.export_chapter_texts(folder, ext)
+        except OSError as exc:
+            self._error("Could not save", str(exc))
+            return
+        self._error("Text exported", f"One file per chapter was saved in:\n{folder}")
+
+    def export_book_audio(self, ext: str) -> None:
+        """The whole document as ONE audio file (all chapters, in order)."""
+        if not len(self.s.model):
+            return
+        doc = self.s.state.doc
+        name = doc.title if doc else "document"
+        path, _ = QFileDialog.getSaveFileName(self, "Export audio", f"{name}{ext}", f"{ext[1:].upper()} audio (*{ext})")
+        if not path:
+            return
+        speed = self.s.state.speed
+        self.s.playback.stop()
+        self._start_job(TaskWorker(lambda w: self.s.exporter.export_book_audio(w, path, speed)),
+                        lambda p: self._error("Audio exported", f"Saved to:\n{p}"), "Preparing audio…")
+
     def export_text(self, ext: str) -> None:
         if not len(self.s.model):
             return
@@ -817,7 +906,7 @@ class MainWindow(QMainWindow):
         if self._job is not None:
             self._job.cancel()
             self._job.wait(3000)
-        s.cache.shutdown()
+        s.cache.shutdown(wait=0.8)
         s.library.flush()
         try:
             s.highlights.flush()

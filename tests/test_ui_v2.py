@@ -565,7 +565,7 @@ def test_error_dialog_details_copy_and_open_log(qapp, tmp_path):
 
 
 def test_unsupported_file_is_a_toast_not_a_dialog(env, tmp_path):
-    f = tmp_path / "notes.docx"
+    f = tmp_path / "notes.xyz"
     f.write_bytes(b"x")
     env.open_path(f)
     assert env._toast.isVisible() and "Unsupported file type" in env._toast.last_text
@@ -1011,3 +1011,147 @@ def test_voice_preview_of_a_chinese_voice_without_the_addon_explains_the_fix(qap
     s.cache.shutdown()
     win.close()
     s.errors.close()
+
+
+# ============================================================ reading PDFs and scans (Settings)
+def test_settings_dialog_shows_and_saves_the_pdf_reading_options(env):
+    win = env
+    dlg = _settings(win)
+    assert (dlg._pdf_headings.isChecked(), dlg._pdf_footnotes.isChecked(), dlg._pdf_furniture.isChecked()) == (True, False, False)
+    assert dlg._pdf_verses.currentData() == "auto" and dlg._ocr_quality.currentData() == "standard"
+    assert "Sharp" in dlg._ocr_quality.itemText(1) and "slower" in dlg._ocr_quality.itemText(1)
+    dlg._pdf_headings.setChecked(False)
+    dlg._pdf_footnotes.setChecked(True)
+    dlg._pdf_furniture.setChecked(True)
+    dlg._pdf_verses.setCurrentIndex(dlg._pdf_verses.findData("never"))
+    dlg._ocr_quality.setCurrentIndex(dlg._ocr_quality.findData("sharp"))
+    dlg.reject()  # Cancel keeps the old values
+    st = win.s.settings
+    assert (st.pdf_headings, st.pdf_footnotes, st.pdf_furniture, st.pdf_verses, st.ocr_quality) == (True, False, False, "auto", "standard")
+    dlg = _settings(win)
+    dlg._pdf_headings.setChecked(False)
+    dlg._pdf_footnotes.setChecked(True)
+    dlg._pdf_verses.setCurrentIndex(dlg._pdf_verses.findData("always"))
+    dlg._ocr_quality.setCurrentIndex(dlg._ocr_quality.findData("sharp"))
+    dlg._save()
+    assert (st.pdf_headings, st.pdf_footnotes, st.pdf_furniture, st.pdf_verses, st.ocr_quality) == (False, True, False, "always", "sharp")
+    again = _settings(win)  # reopening shows what was saved
+    assert (again._pdf_headings.isChecked(), again._pdf_footnotes.isChecked(), again._pdf_verses.currentData(), again._ocr_quality.currentData()) == (False, True, "always", "sharp")
+
+
+def test_pasted_text_and_the_settings_for_math_and_tables(env, qapp):
+    win = env
+    win._open_text_doc("Maths", "The rule is x² + y² = z² for right triangles.\n\nAnd that is all.", "text", None)
+    wait_for(qapp, lambda: len(win.reader._widgets) == 2)
+    assert win.s.model[0].text == "The rule is x squared plus y squared equals z squared for right triangles."
+    win.s.settings.read_math = False
+    win._open_text_doc("Maths 2", "The rule is x² + y² = z² for right triangles.\n\nAnd that is all.", "text", None)
+    wait_for(qapp, lambda: len(win.reader._widgets) == 2)
+    assert win.s.model[0].text == "The rule is x² + y² = z² for right triangles."
+    dlg = _settings(win)
+    assert dlg._pdf_tables.isChecked() and not dlg._read_math.isChecked()
+    dlg._read_math.setChecked(True)
+    dlg._pdf_tables.setChecked(False)
+    dlg._save()
+    assert win.s.settings.read_math is True and win.s.settings.pdf_tables is False
+
+
+def test_settings_dialog_has_the_picture_and_smart_layout_switches_off_by_default(env):
+    win = env
+    dlg = _settings(win)
+    assert not dlg._pdf_images.isChecked() and not dlg._ocr_smart.isChecked()
+    dlg._pdf_images.setChecked(True)
+    dlg._ocr_smart.setChecked(True)
+    dlg._save()
+    assert win.s.settings.pdf_read_images is True and win.s.settings.ocr_smart is True
+    again = _settings(win)
+    assert again._pdf_images.isChecked() and again._ocr_smart.isChecked()
+
+
+# ============================================================ pictures kept in the reader
+def _png_bytes(w=400, h=200, color=(40, 120, 200)):
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h), color).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_pictures_are_shown_between_paragraphs_and_never_read(env, qapp):
+    from core.models import picture_marker
+
+    win = env
+    name = win.s.paths.store_image(_png_bytes())
+    win.s.playback.stop()
+    text = "First paragraph of the text.\n\n" + picture_marker(name) + "\n\nSecond paragraph of the text."
+    win._open_text_doc("With picture", text, "text", None)
+    assert wait_for(qapp, lambda: len(win.reader._widgets) == 3)
+    pic = win.reader._widgets[1]
+    assert pic.is_picture and pic._picture.loaded and not win.reader._widgets[0].is_picture
+    assert 60 < pic.height() < 400 and pic._picture.heightForWidth(600) < 320  # scaled to the column, not the full size
+    # click on the picture: nothing to play, so playback goes to the next paragraph
+    win.s.playback.play_from(1)
+    assert win.s.model.current == 2
+    assert wait_for(qapp, lambda: win.s.state.playback in ("loading", "playing"))
+    tts_calls = [c[0] for c in win.s.tts.calls]
+    assert not any("image" in c for c in tts_calls)  # the picture's marker is never sent to the voice
+    assert win.s.model.next_playable(1) == 2
+
+
+def test_a_missing_picture_file_shows_a_placeholder_not_a_crash(env, qapp):
+    from core.models import picture_marker
+
+    win = env
+    win._open_text_doc("Broken", "Text.\n\n" + picture_marker("0000000000000000.png") + "\n\nMore text.", "text", None)
+    assert wait_for(qapp, lambda: len(win.reader._widgets) == 3)
+    assert win.reader._widgets[1].is_picture and not win.reader._widgets[1]._picture.loaded
+
+
+def test_pictures_are_not_counted_as_words_or_exported(env, qapp, tmp_path):
+    from core.models import picture_marker
+
+    win = env
+    name = win.s.paths.store_image(_png_bytes())
+    win._open_text_doc("Count", "One two three.\n\n" + picture_marker(name) + "\n\nFour five.", "text", None)
+    assert wait_for(qapp, lambda: len(win.reader._widgets) == 3)
+    assert "5 words" in win.reader._meta.text()
+    out = tmp_path / "out.txt"
+    win.s.exporter.export_text(out, win.s.state.doc)
+    assert out.read_text("utf-8").strip() == "One two three.\n\nFour five."
+
+
+def test_the_precache_ignores_pictures(root, qapp):
+    from core.models import picture_marker
+
+    s = make_services(root)
+    texts = ["Text one here.", picture_marker("abc.png"), "Text two here."]
+    s.cache.start(texts, "af_heart", 0, 1.0)
+    assert wait_for(qapp, lambda: s.cache.has(0, 1.0) and s.cache.has(2, 1.0))
+    assert not s.cache.has(1, 1.0) and all("image" not in c[0] for c in s.tts.calls)
+
+
+def test_settings_dialog_pictures_switch_is_on_by_default(env):
+    dlg = _settings(env)
+    assert dlg._pdf_pictures.isChecked() and not dlg._pdf_images.isChecked()
+    dlg._pdf_pictures.setChecked(False)
+    dlg._save()
+    assert env.s.settings.pdf_show_pictures is False
+
+
+def test_settings_content_fits_the_window_so_no_button_is_pushed_out_of_sight(env):
+    """A long checkbox text once made the form wider than the window: the right-hand side (the Clear cache button) was cut off."""
+    from PyQt6.QtWidgets import QPushButton
+
+    dlg = _settings(env)
+    dlg.resize(640, 800)
+    QApplication.processEvents()
+    body, viewport = dlg._scroll.widget(), dlg._scroll.viewport()
+    assert body.minimumSizeHint().width() <= viewport.width(), (body.minimumSizeHint().width(), viewport.width())
+    clear = next(b for b in dlg.findChildren(QPushButton) if b.text() == "Clear cache")
+    right_edge = clear.mapTo(body, clear.rect().topRight()).x()
+    assert right_edge <= viewport.width()
+    from PyQt6.QtWidgets import QCheckBox
+
+    assert all(c.sizeHint().width() <= viewport.width() for c in dlg.findChildren(QCheckBox))
