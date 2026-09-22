@@ -1,11 +1,14 @@
 """Small reusable widgets and factories."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import (QAbstractTextDocumentLayout, QBrush, QColor, QFont, QFontMetricsF, QImage, QPainter, QPainterPath, QPixmap,
                          QTextBlockFormat, QTextCursor, QTextDocument, QTextOption)
-from PyQt6.QtWidgets import (QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QRadioButton, QStackedWidget, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
+from core.models import picture_name
 from .theme import qcolor, svg_pixmap, themed_icon, tokens
 
 
@@ -243,6 +246,61 @@ class ParagraphText(QWidget):
         painter.end()
 
 
+class PictureView(QWidget):
+    """A picture kept from a PDF or scan, shown at the width of the column (never bigger than it really is)."""
+
+    MAX_HEIGHT = 560
+
+    def __init__(self, path, parent=None):
+        super().__init__(parent)
+        self._pm = QPixmap(str(path)) if path else QPixmap()
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._border = QColor(128, 128, 140, 90)
+
+    @property
+    def loaded(self) -> bool:
+        return not self._pm.isNull()
+
+    def _target(self, width: int) -> tuple[int, int]:
+        if self._pm.isNull():
+            return max(width, 40), 48
+        w, h = self._pm.width() / self._pm.devicePixelRatio(), self._pm.height() / self._pm.devicePixelRatio()
+        scale = min(width / w, self.MAX_HEIGHT / h, 1.0)
+        return max(1, int(w * scale)), max(1, int(h * scale))
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._target(max(width, 40))[1] + 8
+
+    def sizeHint(self) -> QSize:
+        w = max(200, self.width())
+        return QSize(w, self.heightForWidth(w))
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(120, 60)
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
+        if self._pm.isNull():
+            p.setPen(self._border)
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "(picture not found)")
+            return
+        w, h = self._target(self.width())
+        x = 0
+        path = QPainterPath()
+        path.addRoundedRect(x, 4, w, h, 6, 6)
+        p.setClipPath(path)
+        p.drawPixmap(x, 4, w, h, self._pm)
+        p.setClipping(False)
+        p.setPen(self._border)
+        p.drawRoundedRect(x, 4, w - 1, h - 1, 6, 6)
+        p.end()
+
+
 class ParagraphWidget(QFrame):
     """One paragraph. Click a word to play from it; drag across text to select it (a colour palette follows);
     click the left gutter to bookmark."""
@@ -254,9 +312,10 @@ class ParagraphWidget(QFrame):
     selection_finished = pyqtSignal(int, int, int, QPoint)  # paragraph, start, end, where the mouse was released (global)
     context_requested = pyqtSignal(int, QPoint, int)  # paragraph, global position, character under the mouse (-1 if none)
 
-    def __init__(self, index: int, text: str, parent=None):
+    def __init__(self, index: int, text: str, images_dir=None, parent=None):
         super().__init__(parent)
         self.index = index
+        self._picture_name = picture_name(text)
         self._theme = "dark"
         self._state = ""
         self._bookmarked = False
@@ -277,9 +336,16 @@ class ParagraphWidget(QFrame):
         self._gutter.setFixedWidth(self.GUTTER - 6)
         self._gutter.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         self._gutter.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self._body = ParagraphText(text)
+        self._body = ParagraphText("" if self._picture_name else text)
         row.addWidget(self._gutter)
-        row.addWidget(self._body, 1)
+        if self._picture_name:  # a picture: shown, never read; the text widget stays (hidden) so the reader's calls still work
+            self._picture = PictureView(Path(images_dir) / self._picture_name if images_dir else None)
+            self._body.hide()
+            self._selectable = False
+            row.addWidget(self._picture, 1)
+        else:
+            self._picture = None
+            row.addWidget(self._body, 1)
         self.apply_theme("dark")
 
     # ------------------------------------------------------------------ pieces the reader configures
@@ -291,7 +357,13 @@ class ParagraphWidget(QFrame):
     def text(self) -> str:
         return self._body.text
 
+    @property
+    def is_picture(self) -> bool:
+        return self._picture is not None
+
     def set_selectable(self, on: bool) -> None:
+        if self._picture is not None:
+            return
         self._selectable = bool(on)
         if not on:
             self._press, self._dragging = None, False
@@ -467,3 +539,148 @@ def paint_avatar(label: QLabel, name: str, color: str, size: int = 32, image=Non
     label.setText(name[:1].upper() if name else "")
     label.setStyleSheet(f"QLabel {{ background: {color}; color: #FFFFFF; border-radius: {size // 2}px; font-weight: 700; "
                         f"font-size: {max(9, int(size * 0.34))}pt; }}")
+
+
+class ExportDialog(QDialog):
+    """Export in two steps: 1) Text or Audio, 2) what shape: one file for the whole book, one per chapter, or (audio) just the open chapter.
+    Afterwards `kind` is "text"/"audio", `scope` is "book"/"chapters"/"open" and `ext` the file type (".txt", ".mp3"...)."""
+
+    def __init__(self, chapters: int, open_chapter: str | None = None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Export")
+        self.setModal(True)
+        self.setMinimumWidth(520)
+        self._chapters = chapters
+        self.kind: str | None = None
+        self.scope: str | None = None
+        self.ext: str | None = None
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(28, 24, 28, 22)
+        lay.setSpacing(14)
+        self._step = make_label("", "muted")
+        lay.addWidget(self._step)
+        self._stack = QStackedWidget()
+        lay.addWidget(self._stack)
+
+        # ---------------------------------------------------------------- step 1: text or audio
+        first = QWidget()
+        fl = QVBoxLayout(first)
+        fl.setContentsMargins(0, 0, 0, 0)
+        fl.setSpacing(12)
+        fl.addWidget(make_label("What do you want to export?", "h2"))
+        self.text_card = QPushButton("Text\nThe words of the document")
+        self.audio_card = QPushButton("Audio\nThe document read aloud, as sound files")
+        self._cards = QButtonGroup(self)
+        self._cards.setExclusive(True)
+        for card in (self.text_card, self.audio_card):
+            card.setObjectName("sourcecard")
+            card.setCheckable(True)
+            card.setCursor(Qt.CursorShape.PointingHandCursor)
+            card.setMinimumHeight(74)
+            self._cards.addButton(card)
+            fl.addWidget(card)
+            card.clicked.connect(self._choose_kind)
+        self._stack.addWidget(first)
+
+        # ---------------------------------------------------------------- step 2: the shape
+        second = QWidget()
+        sl = QVBoxLayout(second)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setSpacing(10)
+        self._title2 = make_label("", "h2")
+        sl.addWidget(self._title2)
+        self._group = QButtonGroup(self)
+        self.options: dict[str, QRadioButton] = {}
+        for scope in ("book", "chapters", "open"):
+            radio = QRadioButton()
+            self._group.addButton(radio)
+            self.options[scope] = radio
+            sl.addWidget(radio)
+            radio.toggled.connect(lambda _on, self=self: self._fill_formats())
+        self._no_chapters = make_label("This document isn't split into chapters, so the whole document is exported as one.", "muted", wrap=True)
+        sl.addWidget(self._no_chapters)
+        row = QHBoxLayout()
+        row.addWidget(make_label("File type"))
+        self.format_combo = QComboBox()
+        self.format_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        row.addWidget(self.format_combo)
+        row.addStretch(1)
+        sl.addLayout(row)
+        self._stack.addWidget(second)
+        self._open_chapter = open_chapter
+
+        # ---------------------------------------------------------------- buttons
+        buttons = QHBoxLayout()
+        self.cancel_button = make_button("Cancel", callback=self.reject)
+        self.back_button = make_button("Back", callback=lambda: self._show_step(0))
+        self.next_button = make_button("Next", "primary", lambda: self._show_step(1))
+        self.export_button = make_button("Export", "primary", self._finish)
+        buttons.addWidget(self.cancel_button)
+        buttons.addStretch(1)
+        for b in (self.back_button, self.next_button, self.export_button):
+            buttons.addWidget(b)
+        lay.addLayout(buttons)
+        self._show_step(0)
+
+    # ------------------------------------------------------------------ steps
+    def _choose_kind(self) -> None:
+        self.next_button.setEnabled(True)
+
+    def _show_step(self, step: int) -> None:
+        if step == 1 and not (self.text_card.isChecked() or self.audio_card.isChecked()):
+            return
+        self._stack.setCurrentIndex(step)
+        self._step.setText(f"Step {step + 1} of 2")
+        self.back_button.setVisible(step == 1)
+        self.next_button.setVisible(step == 0)
+        self.export_button.setVisible(step == 1)
+        self.next_button.setEnabled(self.text_card.isChecked() or self.audio_card.isChecked())
+        if step == 1:
+            self._build_options("audio" if self.audio_card.isChecked() else "text")
+
+    def _build_options(self, kind: str) -> None:
+        many = self._chapters > 1
+        labels = {
+            "text": {"book": "Export as a single text file", "chapters": "Export each chapter as its own text file"},
+            "audio": {"book": "Export as a single audio file — every chapter joined into one",
+                      "chapters": "Export each chapter as its own audio file",
+                      "open": f"Export only the chapter I'm on{f' ({self._open_chapter})' if self._open_chapter else ''}"},
+        }[kind]
+        self._title2.setText("How do you want the text?" if kind == "text" else "How do you want the audio?")
+        for scope, radio in self.options.items():
+            radio.setVisible(scope in labels)
+            if scope in labels:
+                radio.setText(labels[scope])
+                radio.setEnabled(scope == "book" or many)
+        self._no_chapters.setVisible(not many)
+        self._group.setExclusive(False)
+        for radio in self.options.values():
+            radio.setChecked(False)
+        self._group.setExclusive(True)
+        self.options["book"].setChecked(True)
+        self._fill_formats()
+
+    def _fill_formats(self) -> None:
+        if self._stack.currentIndex() != 1:
+            return
+        kind = "audio" if self.audio_card.isChecked() else "text"
+        scope = self.selected_scope()
+        types = ((".mp3", "MP3 (smaller)"), (".wav", "WAV (best quality, large)")) if kind == "audio" else \
+            (((".txt", "Plain text (.txt)"), (".md", "Markdown (.md)")) + (((".json", "JSON (.json)"),) if scope == "book" else ()))
+        current = self.format_combo.currentData()
+        self.format_combo.blockSignals(True)
+        self.format_combo.clear()
+        for ext, label in types:
+            self.format_combo.addItem(label, ext)
+        if current in [e for e, _l in types]:
+            self.format_combo.setCurrentIndex([e for e, _l in types].index(current))
+        self.format_combo.blockSignals(False)
+
+    def selected_scope(self) -> str:
+        return next((s for s, r in self.options.items() if r.isChecked()), "book")
+
+    def _finish(self) -> None:
+        self.kind = "audio" if self.audio_card.isChecked() else "text"
+        self.scope = self.selected_scope()
+        self.ext = self.format_combo.currentData()
+        self.accept()
